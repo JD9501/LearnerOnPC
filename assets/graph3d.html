@@ -1,0 +1,304 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>3D knowledge graph</title>
+<style>
+  :root { --bg:#0b0f1a; --fg:#e6e9f2; --muted:#8a93a8; --panel:rgba(22,30,48,.92); --line:#2a3550; --accent:#6ea8ff; }
+  html,body { margin:0; height:100%; background:radial-gradient(ellipse at 50% 40%,#141c33 0%,var(--bg) 70%);
+              color:var(--fg); font-family:"Segoe UI",system-ui,sans-serif; overflow:hidden; }
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  canvas.drag { cursor:grabbing; }
+  .panel { position:fixed; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px;
+           font-size:12px; backdrop-filter:blur(6px); }
+  #controls { top:12px; left:12px; width:230px; }
+  #controls label { display:flex; align-items:center; gap:6px; margin:7px 0; color:var(--muted); }
+  #controls input[type=text], #controls select { width:100%; box-sizing:border-box; background:#0f1626; color:var(--fg);
+        border:1px solid var(--line); border-radius:7px; padding:6px 8px; font:inherit; }
+  #controls input[type=range] { width:100%; accent-color:var(--accent); }
+  button { background:#1c2742; color:var(--fg); border:1px solid var(--line); border-radius:7px; padding:5px 10px;
+           font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  .row { display:flex; gap:6px; align-items:center; }
+  #legend { margin-top:8px; max-height:150px; overflow:auto; }
+  #legend div { display:flex; align-items:center; gap:7px; margin:3px 0; color:var(--muted); }
+  #legend i { width:10px; height:10px; border-radius:50%; display:inline-block; flex:none; }
+  #info { top:12px; right:12px; width:270px; max-height:calc(100% - 60px); overflow:auto; display:none; }
+  #info h3 { margin:0 0 2px; font-size:15px; }
+  #info .tag { color:var(--accent); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  #info p { margin:8px 0; line-height:1.45; }
+  #info .meta { color:var(--muted); }
+  #info .conn { display:block; width:100%; text-align:left; margin:3px 0; background:transparent; border:1px solid transparent;
+                padding:4px 6px; border-radius:6px; }
+  #info .conn:hover { background:#1c2742; border-color:var(--line); }
+  #info .conn em { color:var(--muted); font-style:normal; }
+  #empty { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted);
+           font-size:14px; text-align:center; padding:0 60px; pointer-events:none; }
+  #hint { position:fixed; left:14px; bottom:10px; font-size:11px; color:var(--muted); }
+  #stats { position:fixed; right:14px; bottom:10px; font-size:11px; color:var(--muted); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="controls" class="panel">
+  <input id="q" type="text" placeholder="Search concepts...">
+  <label>Colour by
+    <select id="mode"><option value="group">Cluster</option><option value="type">Type</option></select>
+  </label>
+  <label><input id="auto" type="checkbox" checked> Auto-rotate</label>
+  <div style="color:var(--muted);margin-top:6px">Learning timeline: <b id="tlabel" style="color:var(--fg)">all</b></div>
+  <input id="time" type="range" min="0" max="100" value="100" step="1">
+  <div class="row" style="margin-top:6px"><button id="play">Play</button><button id="reset">Reset view</button></div>
+  <div id="legend"></div>
+</div>
+<div id="info" class="panel"></div>
+<div id="empty">The 3D knowledge graph grows here as concepts are discovered.</div>
+<div id="hint">Drag to rotate - right-drag or Shift-drag to pan - scroll to zoom - click a concept</div>
+<div id="stats"></div>
+<script>
+const GROUP_COLORS = ["#6ea8ff","#ff8fab","#7ee2b8","#ffd166","#b79cff","#ff9f68","#5fd3e0","#c3e66e","#f78fd0","#9aa7ff","#e0e0e0","#ff6b6b"];
+const TYPE_COLORS = { concept:"#6ea8ff", term:"#b79cff", person:"#ff8fab", place:"#7ee2b8", event:"#ffd166",
+                      era:"#ff9f68", material:"#c3e66e", tool:"#5fd3e0", example:"#f78fd0", formula:"#e0e0e0" };
+const TYPE_ALIAS = { site:"place", region:"place", location:"place", technology:"tool", method:"tool", date:"era", period:"era",
+                     substance:"material", idea:"concept", theory:"concept", people:"person" };
+const tkey = t => { t = String(t || "").toLowerCase(); return TYPE_COLORS[t] ? t : (TYPE_ALIAS[t] || "concept"); };
+const FONT = '"Segoe UI",system-ui,sans-serif';
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+let nodes = [], edges = [], byId = new Map(), adj = new Map(), duration = 0;
+let rotY = 0.6, rotX = -0.35, zoom = 1, panX = 0, panY = 0, alpha = 1;
+let tCut = Infinity, hover = null, selected = null, query = "", mode = "group", auto = true;
+let W = 0, H = 0, dpr = 1, dragging = false, playing = null;
+let groupNames = new Map();
+
+function fmt(t) { t = Math.max(0, Math.floor(t)); const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); }
+function importance(n) { return n.count + 2 * n.degree; }
+function colorOf(n) { return mode === "type" ? (TYPE_COLORS[tkey(n.type)]) : GROUP_COLORS[n.group % GROUP_COLORS.length]; }
+function visible(n) { return n.first_seen <= tCut; }
+
+function resize() {
+  dpr = window.devicePixelRatio || 1; W = window.innerWidth; H = window.innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", resize); resize();
+
+// ---------------------------------------------------------------- data
+function render(data) {
+  const old = new Map(nodes.map(n => [n.id, n]));
+  const incoming = (data && data.nodes) || [];
+  duration = (data && data.duration) || 0;
+  nodes = incoming.map(n => {
+    const o = old.get(n.id);
+    const p = o ? { x: o.x, y: o.y, z: o.z, vx: o.vx, vy: o.vy, vz: o.vz } :
+      { x: (Math.random() - .5) * 160, y: (Math.random() - .5) * 160, z: (Math.random() - .5) * 160, vx: 0, vy: 0, vz: 0 };
+    return Object.assign({}, n, p, { sx: 0, sy: 0, sz: 0, sf: 1, r: 6 });
+  });
+  byId = new Map(nodes.map(n => [n.id, n]));
+  edges = ((data && data.edges) || []).filter(e => byId.has(e.source) && byId.has(e.target))
+    .map(e => ({ a: byId.get(e.source), b: byId.get(e.target), label: e.label, weight: e.weight }));
+  adj = new Map(nodes.map(n => [n.id, []]));
+  edges.forEach(e => { adj.get(e.a.id).push({ n: e.b, e, out: true }); adj.get(e.b.id).push({ n: e.a, e, out: false }); });
+  // place brand-new nodes near a neighbour so the layout doesn't jump
+  nodes.forEach(n => { if (!old.has(n.id) && adj.get(n.id).length) {
+    const q = adj.get(n.id)[0].n; if (old.has(q.id)) { n.x = q.x + (Math.random() - .5) * 40; n.y = q.y + (Math.random() - .5) * 40; n.z = q.z + (Math.random() - .5) * 40; } } });
+  // cluster names
+  groupNames = new Map();
+  nodes.forEach(n => { const cur = groupNames.get(n.group); if (!cur || importance(n) > importance(cur)) groupNames.set(n.group, n); });
+  const slider = document.getElementById("time"), atEnd = !isFinite(tCut);
+  slider.max = Math.max(1, Math.ceil(duration));
+  if (atEnd) slider.value = slider.max;
+  hover = null;
+  if (selected) selected = byId.get(selected.id) || null;
+  alpha = Math.max(alpha, 0.7);
+  document.getElementById("empty").style.display = nodes.length ? "none" : "flex";
+  document.getElementById("stats").textContent = nodes.length + " concepts - " + edges.length + " relations";
+  buildLegend(); showInfo(selected);
+}
+
+function buildLegend() {
+  const lg = document.getElementById("legend"); lg.textContent = "";
+  const add = (c, t) => { const d = document.createElement("div"), i = document.createElement("i"), s = document.createElement("span");
+    i.style.background = c; s.textContent = t; d.append(i, s); lg.append(d); };
+  if (mode === "type") { [...new Set(nodes.map(n => tkey(n.type)))].sort().forEach(t => add(TYPE_COLORS[t], t)); }
+  else [...groupNames.entries()].sort((a, b) => a[0] - b[0]).slice(0, 10)
+    .forEach(([g, n]) => add(GROUP_COLORS[g % GROUP_COLORS.length], n.label));
+}
+
+// ---------------------------------------------------------------- physics
+function simulate(vis) {
+  const REP = 2600, LEN = 85, K = 0.025, G = 0.012;
+  for (let i = 0; i < vis.length; i++) {
+    const a = vis[i];
+    for (let j = i + 1; j < vis.length; j++) {
+      const b = vis[j];
+      let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      const d2 = dx * dx + dy * dy + dz * dz + 0.5, d = Math.sqrt(d2), f = REP / d2 * alpha;
+      dx /= d; dy /= d; dz /= d;
+      a.vx += dx * f; a.vy += dy * f; a.vz += dz * f; b.vx -= dx * f; b.vy -= dy * f; b.vz -= dz * f;
+    }
+  }
+  for (const e of edges) {
+    if (!visible(e.a) || !visible(e.b)) continue;
+    let dx = e.b.x - e.a.x, dy = e.b.y - e.a.y, dz = e.b.z - e.a.z;
+    const d = Math.sqrt(dx * dx + dy * dy + dz * dz) + 0.01, f = (d - LEN) * K * alpha * Math.min(2, 0.7 + e.weight * 0.3);
+    dx /= d; dy /= d; dz /= d;
+    e.a.vx += dx * f; e.a.vy += dy * f; e.a.vz += dz * f; e.b.vx -= dx * f; e.b.vy -= dy * f; e.b.vz -= dz * f;
+  }
+  for (const n of vis) {
+    n.vx -= n.x * G * alpha; n.vy -= n.y * G * alpha; n.vz -= n.z * G * alpha;
+    n.vx *= 0.82; n.vy *= 0.82; n.vz *= 0.82;
+    n.x += n.vx; n.y += n.vy; n.z += n.vz;
+  }
+  alpha *= 0.992;
+}
+
+// ---------------------------------------------------------------- drawing
+function project(n) {
+  const cy = Math.cos(rotY), sy = Math.sin(rotY), cx = Math.cos(rotX), sx = Math.sin(rotX);
+  const x1 = n.x * cy + n.z * sy, z1 = -n.x * sy + n.z * cy;
+  const y2 = n.y * cx - z1 * sx, z2 = n.y * sx + z1 * cx;
+  const f = 700 / (700 + z2);
+  n.sx = W / 2 + panX + x1 * f * zoom; n.sy = H / 2 + panY + y2 * f * zoom; n.sz = z2; n.sf = f;
+  n.r = Math.max(2.5, (4.5 + Math.sqrt(importance(n)) * 2.1) * f * zoom);
+}
+
+function isNear(n) { return selected && (n === selected || adj.get(selected.id).some(x => x.n === n)); }
+function matches(n) { return query && n.label.toLowerCase().includes(query); }
+
+function draw(vis) {
+  ctx.clearRect(0, 0, W, H);
+  vis.forEach(project);
+  const focus = hover || selected, hasFocus = !!focus;
+  const depthA = n => Math.min(1, Math.max(0.25, 0.65 + n.sz / 700));
+  // edges
+  ctx.lineCap = "round";
+  for (const e of edges) {
+    if (!visible(e.a) || !visible(e.b)) continue;
+    const hot = hasFocus && (e.a === focus || e.b === focus);
+    const dim = (hasFocus && !hot) || (query && !(matches(e.a) || matches(e.b)));
+    const da = (depthA(e.a) + depthA(e.b)) / 2;
+    ctx.strokeStyle = hot ? `rgba(160,200,255,${0.95})` : `rgba(130,150,200,${(dim ? 0.07 : 0.38) * da + 0.04})`;
+    ctx.lineWidth = (hot ? 2.2 : 1) * Math.min(2.2, 0.6 + e.weight * 0.35) * Math.min(1.4, (e.a.sf + e.b.sf) / 2 * zoom);
+    ctx.beginPath(); ctx.moveTo(e.a.sx, e.a.sy); ctx.lineTo(e.b.sx, e.b.sy); ctx.stroke();
+    if (hot) {   // arrow head + label
+      const dx = e.b.sx - e.a.sx, dy = e.b.sy - e.a.sy, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
+      const tx = e.b.sx - ux * (e.b.r + 3), ty = e.b.sy - uy * (e.b.r + 3);
+      ctx.fillStyle = "rgba(160,200,255,.95)"; ctx.beginPath();
+      ctx.moveTo(tx, ty); ctx.lineTo(tx - ux * 9 - uy * 4, ty - uy * 9 + ux * 4); ctx.lineTo(tx - ux * 9 + uy * 4, ty - uy * 9 - ux * 4); ctx.fill();
+      label(e.label, (e.a.sx + e.b.sx) / 2, (e.a.sy + e.b.sy) / 2, 11, "#a9c6ff", 1);
+    }
+  }
+  // nodes far -> near
+  const order = vis.slice().sort((a, b) => b.sz - a.sz);
+  const topN = new Set(vis.slice().sort((a, b) => importance(b) - importance(a)).slice(0, 12));
+  for (const n of order) {
+    const c = colorOf(n);
+    const dim = (hasFocus && n !== focus && !adj.get(focus.id).some(x => x.n === n)) || (query && !matches(n));
+    const a = dim ? 0.18 : depthA(n);
+    ctx.globalAlpha = a;
+    const grd = ctx.createRadialGradient(n.sx - n.r * .35, n.sy - n.r * .35, n.r * .1, n.sx, n.sy, n.r);
+    grd.addColorStop(0, "#ffffff"); grd.addColorStop(0.25, c); grd.addColorStop(1, shade(c, -0.45));
+    ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(n.sx, n.sy, n.r, 0, 6.2832); ctx.fill();
+    if (n === selected || n === hover || matches(n)) {
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(n.sx, n.sy, n.r + 3, 0, 6.2832); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    const showLabel = n === hover || n === selected || matches(n) || (hasFocus && !dim && adj.get(focus.id).some(x => x.n === n))
+      || (!hasFocus && !query && (topN.has(n) || zoom > 1.7));
+    if (showLabel && !dim) label(n.label, n.sx, n.sy + n.r + 11, n === hover || n === selected ? 13 : 11.5, "#f2f5ff", Math.max(0.55, a));
+  }
+}
+
+function label(text, x, y, size, color, alpha) {
+  ctx.globalAlpha = alpha; ctx.font = `600 ${size}px ${FONT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.lineWidth = 3.5; ctx.strokeStyle = "rgba(8,12,22,.9)"; ctx.strokeText(text, x, y);
+  ctx.fillStyle = color; ctx.fillText(text, x, y); ctx.globalAlpha = 1;
+}
+
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16); let r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  const f = v => Math.max(0, Math.min(255, Math.round(amt < 0 ? v * (1 + amt) : v + (255 - v) * amt)));
+  return `rgb(${f(r)},${f(g)},${f(b)})`;
+}
+
+function frame() {
+  const vis = nodes.filter(visible);
+  if (alpha > 0.02) simulate(vis);
+  if (auto && !dragging && !hover && !selected) rotY += 0.0028;
+  draw(vis);
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- interaction
+function pick(mx, my) {
+  let best = null;
+  for (const n of nodes) {
+    if (!visible(n)) continue;
+    const d = Math.hypot(n.sx - mx, n.sy - my);
+    if (d <= n.r + 4 && (!best || n.sz < best.sz)) best = n;
+  }
+  return best;
+}
+let lx = 0, ly = 0, downX = 0, downY = 0, panning = false;
+cv.addEventListener("contextmenu", e => e.preventDefault());
+cv.addEventListener("pointerdown", e => { dragging = true; panning = e.shiftKey || e.button === 2; lx = downX = e.clientX; ly = downY = e.clientY;
+  cv.classList.add("drag"); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener("pointermove", e => {
+  if (dragging) {
+    const dx = e.clientX - lx, dy = e.clientY - ly; lx = e.clientX; ly = e.clientY;
+    if (panning) { panX += dx; panY += dy; } else { rotY += dx * 0.006; rotX = Math.max(-1.5, Math.min(1.5, rotX - dy * 0.006)); }
+  } else { hover = pick(e.clientX, e.clientY); cv.style.cursor = hover ? "pointer" : "grab"; }
+});
+cv.addEventListener("pointerup", e => {
+  dragging = false; cv.classList.remove("drag");
+  if (Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) < 5) {
+    const n = pick(e.clientX, e.clientY); selected = n; showInfo(n);
+  }
+});
+cv.addEventListener("wheel", e => { e.preventDefault(); zoom = Math.max(0.25, Math.min(5, zoom * Math.exp(-e.deltaY * 0.0014))); }, { passive: false });
+cv.addEventListener("dblclick", resetView);
+
+function resetView() { rotY = 0.6; rotX = -0.35; zoom = 1; panX = panY = 0; selected = null; showInfo(null); alpha = Math.max(alpha, 0.5); }
+
+function showInfo(n) {
+  const box = document.getElementById("info");
+  if (!n) { box.style.display = "none"; return; }
+  box.style.display = "block"; box.textContent = "";
+  const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+  box.append(mk("div", "tag", n.type), mk("h3", "", n.label));
+  box.append(mk("p", "", n.definition || "No definition captured yet."));
+  box.append(mk("p", "meta", `First seen ${fmt(n.first_seen)} - mentioned ${n.count}x - ${n.degree} connection${n.degree === 1 ? "" : "s"}`));
+  const links = adj.get(n.id) || [];
+  if (links.length) box.append(mk("div", "meta", "Connections"));
+  links.forEach(l => {
+    const b = mk("button", "conn"); const em = mk("em", "", l.out ? l.e.label + " -> " : "<- " + l.e.label + " ");
+    b.append(em, document.createTextNode(l.n.label));
+    b.onclick = () => { selected = l.n; showInfo(l.n); };
+    box.append(b);
+  });
+}
+
+document.getElementById("q").addEventListener("input", e => { query = e.target.value.trim().toLowerCase(); });
+document.getElementById("mode").addEventListener("change", e => { mode = e.target.value; buildLegend(); });
+document.getElementById("auto").addEventListener("change", e => { auto = e.target.checked; });
+document.getElementById("reset").addEventListener("click", resetView);
+const slider = document.getElementById("time"), tlabel = document.getElementById("tlabel");
+function setTime(v) {
+  const max = Number(slider.max);
+  if (v >= max) { tCut = Infinity; tlabel.textContent = "all"; } else { tCut = v; tlabel.textContent = "up to " + fmt(v); }
+  slider.value = v; alpha = Math.max(alpha, 0.35);
+}
+slider.addEventListener("input", () => { stopPlay(); setTime(Number(slider.value)); });
+function stopPlay() { if (playing) { clearInterval(playing); playing = null; document.getElementById("play").textContent = "Play"; } }
+document.getElementById("play").addEventListener("click", () => {
+  if (playing) { stopPlay(); return; }
+  const max = Number(slider.max); let v = 0; setTime(0);
+  document.getElementById("play").textContent = "Stop";
+  playing = setInterval(() => { v += max / 160; if (v >= max) { setTime(max); stopPlay(); } else setTime(v); }, 75);
+});
+
+function exportPNG() { return cv.toDataURL("image/png"); }
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

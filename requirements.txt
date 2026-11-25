@@ -1,0 +1,7 @@
+PySide6-Essentials>=6.6
+PySide6-Addons>=6.6
+PySide6-WebEngine
+huggingface_hub>=0.23
+tqdm
+psutil>=5.9
+truststore

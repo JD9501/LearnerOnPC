@@ -1,0 +1,6 @@
+.buildenv/
+build/
+dist/
+__pycache__/
+*.zip
+build_log.txt

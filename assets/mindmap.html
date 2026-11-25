@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mind map</title>
+<style>
+  :root { --bg:#0f1420; --fg:#e6e9f2; --muted:#8a93a8; --panel:#182033; --line:#2a3550; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+              font-family:"Segoe UI",system-ui,-apple-system,sans-serif; overflow:hidden; }
+  #svg { width:100%; height:100%; display:block; cursor:grab; touch-action:none; }
+  #svg.drag { cursor:grabbing; }
+  .node { cursor:pointer; }
+  .node:hover rect.box { filter:brightness(1.35); }
+  #bar { position:fixed; top:12px; right:12px; display:flex; gap:6px; z-index:5; }
+  #bar button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:8px;
+                padding:6px 11px; font:inherit; font-size:12px; cursor:pointer; }
+  #bar button:hover { border-color:#4b6bff; }
+  #hint { position:fixed; left:14px; bottom:10px; font-size:11px; color:var(--muted); }
+  #empty { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted);
+           font-size:14px; text-align:center; padding:0 40px; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button onclick="fit()">Fit</button>
+  <button onclick="setLevel(1)">Level 1</button>
+  <button onclick="setLevel(2)">Level 2</button>
+  <button onclick="expandAll()">Expand all</button>
+</div>
+<svg id="svg" xmlns="http://www.w3.org/2000/svg"><g id="g"></g></svg>
+<div id="empty">This demo session has no mind map.</div>
+<div id="hint">Click a branch to collapse or expand - drag to pan - scroll to zoom</div>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const PALETTE = ["#6ea8ff","#ff8fab","#7ee2b8","#ffd166","#b79cff","#ff9f68","#5fd3e0","#c3e66e","#f78fd0","#9aa7ff"];
+const FONT = '"Segoe UI",system-ui,sans-serif';
+const ROW = 38, GAP = 54, MAXW = 300;
+const svg = document.getElementById("svg"), g = document.getElementById("g");
+const mctx = document.createElement("canvas").getContext("2d");
+let data = null, collapsed = new Set(), view = { x: 40, y: 40, k: 1 }, fitted = false, layoutBox = null;
+
+function fontSize(d) { return d === 0 ? 17 : d === 1 ? 14 : 13; }
+function measure(text, d) { mctx.font = (d <= 1 ? "600 " : "") + fontSize(d) + "px " + FONT; return mctx.measureText(text).width; }
+function fitText(text, d) {
+  if (measure(text, d) <= MAXW) return text;
+  let lo = 1, hi = text.length;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (measure(text.slice(0, mid) + "...", d) <= MAXW) lo = mid; else hi = mid - 1; }
+  return text.slice(0, lo).trimEnd() + "...";
+}
+
+function layout(root) {
+  let leafY = 0; const cols = []; const all = [];
+  (function walk(n, depth, path, color) {
+    n._path = path; n._depth = depth; n._color = color; n._label = fitText(n.name, depth);
+    n._w = Math.ceil(measure(n._label, depth)) + 26;
+    cols[depth] = Math.max(cols[depth] || 0, n._w);
+    const has = n.children && n.children.length;
+    n._hasKids = !!has;
+    n._kids = has && !collapsed.has(path) ? n.children : [];
+    n._kids.forEach((c, i) => walk(c, depth + 1, path + "/" + i, depth === 0 ? PALETTE[i % PALETTE.length] : color));
+    if (!n._kids.length) { n._y = leafY; leafY += ROW; }
+    else n._y = (n._kids[0]._y + n._kids[n._kids.length - 1]._y) / 2;
+    all.push(n);
+  })(root, 0, "0", "#8fb4ff");
+  const xs = [0];
+  for (let i = 1; i < cols.length; i++) xs[i] = xs[i - 1] + cols[i - 1] + GAP;
+  let maxX = 0;
+  all.forEach(n => { n._x = xs[n._depth]; maxX = Math.max(maxX, n._x + n._w); });
+  layoutBox = { w: maxX, h: Math.max(leafY, ROW) };
+  return all;
+}
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function draw() {
+  g.textContent = "";
+  const empty = !data || !data.name;
+  document.getElementById("empty").style.display = (empty || !(data.children && data.children.length)) ? "flex" : "none";
+  if (empty) return;
+  const nodes = layout(data);
+  const links = el("g", {}, g), boxes = el("g", {}, g);
+  nodes.forEach(n => {
+    n._kids.forEach(c => {
+      const x1 = n._x + n._w, y1 = n._y, x2 = c._x, y2 = c._y, mx = (x1 + x2) / 2;
+      el("path", { d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, fill: "none", stroke: c._color,
+                   "stroke-width": Math.max(1.5, 4 - c._depth), "stroke-opacity": 0.75, "stroke-linecap": "round" }, links);
+    });
+  });
+  nodes.forEach(n => {
+    const grp = el("g", { class: "node", transform: `translate(${n._x},${n._y})` }, boxes);
+    const h = n._depth === 0 ? 34 : 28;
+    const isRoot = n._depth === 0;
+    const r = el("rect", { class: "box", x: 0, y: -h / 2, width: n._w, height: h, rx: h / 2,
+                           fill: isRoot ? "#2b3f7a" : n._color, "fill-opacity": isRoot ? 1 : 0.16,
+                           stroke: isRoot ? "#8fb4ff" : n._color, "stroke-width": isRoot ? 2 : 1.4 }, grp);
+    const t = el("text", { x: n._w / 2, y: 0, "text-anchor": "middle", "dominant-baseline": "central",
+                           fill: "#e6e9f2", "font-family": FONT, "font-size": fontSize(n._depth),
+                           "font-weight": n._depth <= 1 ? 600 : 400 }, grp);
+    t.textContent = n._label;
+    const tip = el("title", {}, grp); tip.textContent = n.name;
+    if (n._hasKids && !n._kids.length) {
+      const b = el("g", { transform: `translate(${n._w + 12},0)` }, grp);
+      el("circle", { r: 9, fill: n._color, "fill-opacity": 0.9 }, b);
+      const bt = el("text", { "text-anchor": "middle", "dominant-baseline": "central", fill: "#0f1420",
+                              "font-family": FONT, "font-size": 11, "font-weight": 700 }, b);
+      bt.textContent = "+" + n.children.length;
+    }
+    grp.addEventListener("click", ev => {
+      if (moved > 4 || !n._hasKids) return;
+      if (collapsed.has(n._path)) collapsed.delete(n._path); else collapsed.add(n._path);
+      draw();
+    });
+  });
+  applyView();
+}
+
+function applyView() { g.setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`); }
+
+function fit() {
+  if (!layoutBox) return;
+  const W = svg.clientWidth, H = svg.clientHeight, pad = 50;
+  const k = Math.min((W - pad * 2) / (layoutBox.w + 30), (H - pad * 2) / layoutBox.h, 1.4);
+  view.k = Math.max(0.15, k);
+  view.x = (W - (layoutBox.w + 30) * view.k) / 2;
+  view.y = (H - layoutBox.h * view.k) / 2 + ROW * view.k / 2;
+  applyView();
+}
+
+function setLevel(level) {
+  collapsed = new Set();
+  (function walk(n, depth, path) {
+    if (!n.children) return;
+    if (depth >= level) collapsed.add(path);
+    n.children.forEach((c, i) => walk(c, depth + 1, path + "/" + i));
+  })(data, 0, "0");
+  draw(); fit();
+}
+function expandAll() { collapsed = new Set(); draw(); fit(); }
+
+function render(tree) {
+  data = tree && tree.name ? tree : null;
+  draw();
+  if (data && data.children && data.children.length && !fitted) { fitted = true; fit(); }
+}
+
+function exportSVG() {
+  if (!data) return "";
+  const pad = 40, w = layoutBox.w + 30 + pad * 2, h = layoutBox.h + pad * 2;
+  const clone = svg.cloneNode(true);
+  clone.removeAttribute("style"); clone.removeAttribute("id");
+  clone.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  clone.setAttribute("width", w); clone.setAttribute("height", h);
+  const cg = clone.querySelector("g");
+  cg.setAttribute("transform", `translate(${pad},${pad + ROW / 2 - 4})`);
+  const bg = document.createElementNS(NS, "rect");
+  bg.setAttribute("width", w); bg.setAttribute("height", h); bg.setAttribute("fill", "#0f1420");
+  clone.insertBefore(bg, clone.firstChild);
+  return new XMLSerializer().serializeToString(clone);
+}
+
+// pan & zoom
+let dragging = false, sx = 0, sy = 0, ox = 0, oy = 0, moved = 0;
+svg.addEventListener("pointerdown", e => { dragging = true; moved = 0; sx = e.clientX; sy = e.clientY; ox = view.x; oy = view.y; svg.classList.add("drag"); });
+window.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  moved = Math.max(moved, Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy));
+  view.x = ox + e.clientX - sx; view.y = oy + e.clientY - sy; applyView();
+});
+window.addEventListener("pointerup", () => { dragging = false; svg.classList.remove("drag"); });
+svg.addEventListener("wheel", e => {
+  e.preventDefault();
+  const f = Math.exp(-e.deltaY * 0.0015), k = Math.min(3, Math.max(0.1, view.k * f)), r = k / view.k;
+  const rect = svg.getBoundingClientRect(), mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  view.x = mx - (mx - view.x) * r; view.y = my - (my - view.y) * r; view.k = k; applyView();
+}, { passive: false });
+window.addEventListener("resize", () => { if (data) fit(); });
+</script>
+</body>
+</html>

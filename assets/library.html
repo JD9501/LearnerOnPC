@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Library</title>
+<style>
+  :root { --bg:#0f1420; --fg:#e6e9f2; --muted:#8a93a8; --panel:#161e33; --line:#2a3550; --accent:#6ea8ff; --good:#4fd1a1; --warn:#ffd166; }
+  html,body { margin:0; background:var(--bg); color:var(--fg); font-family:"Segoe UI",system-ui,sans-serif; font-size:13px; }
+  .wrap { max-width:1100px; margin:0 auto; padding:18px 22px 40px; }
+  h2 { font-size:15px; margin:26px 0 10px; color:var(--accent); font-weight:600; }
+  .tiles { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:10px; }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .tile b { display:block; font-size:22px; font-weight:600; }
+  .tile span { color:var(--muted); font-size:11px; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; color:var(--muted); font-weight:500; font-size:11px; padding:6px 8px; border-bottom:1px solid var(--line); }
+  td { padding:8px; border-bottom:1px solid #1d2740; vertical-align:middle; }
+  tr.off td { opacity:.5; }
+  .badge { display:inline-block; font-size:10px; padding:2px 7px; border-radius:20px; border:1px solid var(--line); color:var(--muted); margin-right:4px; }
+  .badge.meeting { color:var(--warn); border-color:#6b5a25; }
+  .badge.ext { color:var(--good); border-color:#25604b; }
+  .badge.link { color:var(--accent); border-color:#2d4a85; }
+  a.btn { display:inline-block; background:#1c2742; color:var(--fg); border:1px solid var(--line); border-radius:7px; padding:3px 9px;
+          text-decoration:none; font-size:12px; margin-right:4px; cursor:pointer; }
+  a.btn:hover { border-color:var(--accent); }
+  a.danger:hover { border-color:#ff7b8a; color:#ff9aa6; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  ul { margin:0; padding-left:18px; } li { margin:4px 0; } li small { color:var(--muted); }
+  .muted { color:var(--muted); }
+  #empty { color:var(--muted); padding:60px 0; text-align:center; }
+  input#q { background:#121a2c; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 10px; width:260px; font:inherit; }
+  @media (max-width:800px) { .two { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 style="font-size:19px;margin:0 0 4px">Library</h1>
+  <div class="muted" id="sub">Everything captured by the app and by the Chrome extension lives in one place on this PC.</div>
+  <div id="empty" style="display:none">No sessions yet. Capture something and it will show up here.</div>
+  <div id="body">
+    <h2>Across all sessions</h2>
+    <div class="tiles" id="tiles"></div>
+    <div class="two">
+      <div><h2>Core ideas across everything</h2><ul id="core"></ul></div>
+      <div><h2>Ideas that tie sessions together</h2><ul id="bridges"></ul></div>
+    </div>
+    <div class="two">
+      <div><h2>Sessions that share concepts</h2><ul id="links"></ul></div>
+      <div><h2>Separate islands (unconnected topics)</h2><ul id="islands"></ul></div>
+    </div>
+    <h2>Sessions <input id="q" placeholder="Search sessions..." style="margin-left:10px"></h2>
+    <table><thead><tr><th>Title</th><th>Kind</th><th>When</th><th>Length</th><th>Notes</th><th>Concepts</th><th></th></tr></thead>
+    <tbody id="rows"></tbody></table>
+  </div>
+</div>
+<script>
+let D = null;
+const $ = id => document.getElementById(id);
+const mk = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+function fmtDur(s) { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? h + "h " + m + "m" : m + " min"; }
+function fmtDate(t) { return t ? new Date(t * 1000).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""; }
+function act(label, href, cls) { const a = mk("a", "btn " + (cls || ""), label); a.href = href; return a; }
+function list(id, items, f) { const ul = $(id); ul.textContent = ""; if (!items.length) { ul.append(mk("li", "muted", "Nothing yet")); return; } items.forEach(x => ul.append(f(x))); }
+
+function render(d) {
+  D = d; const st = d.stats || {};
+  const none = !(d.sessions && d.sessions.length);
+  $("empty").style.display = none ? "block" : "none"; $("body").style.display = none ? "none" : "block";
+  if (none) return;
+  const tiles = [["Sessions", st.sessions], ["Meetings", st.meetings], ["Recorded", st.recorded], ["From Chrome", st.from_extension],
+    ["Concepts", st.concepts], ["Relations", st.relations], ["Islands", st.islands], ["Bridging ideas", st.bridging], ["Hours captured", st.hours]];
+  $("tiles").textContent = "";
+  tiles.forEach(([k, v]) => { const t = mk("div", "tile"); t.append(mk("b", "", String(v ?? 0)), mk("span", "", k)); $("tiles").append(t); });
+  list("core", d.core || [], c => { const li = mk("li", "", c.label); li.append(mk("small", "", "  - in " + c.sessions + " session" + (c.sessions === 1 ? "" : "s"))); return li; });
+  list("bridges", d.bridges || [], b => { const li = mk("li", "", b.label); li.append(mk("small", "", "  - " + b.sessions.join(", "))); return li; });
+  list("links", d.links || [], l => { const li = mk("li", "", l.a + "  <->  " + l.b); li.append(mk("small", "", "  - " + l.shared + " shared concept" + (l.shared === 1 ? "" : "s"))); return li; });
+  list("islands", d.islands || [], i => { const li = mk("li", "", i.label + " (" + i.size + " concepts)"); li.append(mk("small", "", "  - " + i.sessions.length + " session" + (i.sessions.length === 1 ? "" : "s"))); return li; });
+  drawRows();
+}
+function drawRows() {
+  const q = $("q").value.trim().toLowerCase(), body = $("rows"); body.textContent = "";
+  (D.sessions || []).filter(s => !q || (s.title || "").toLowerCase().includes(q) || (s.topic || "").toLowerCase().includes(q)).forEach(s => {
+    const tr = mk("tr", s.excluded ? "off" : ""), t = mk("td"), k = mk("td"), w = mk("td", "muted", fmtDate(s.created));
+    t.append(mk("div", "", s.title || "Untitled")); if (s.topic) t.append(mk("div", "muted", s.topic));
+    k.append(mk("span", "badge " + (s.mode === "meeting" ? "meeting" : ""), s.mode === "meeting" ? "Meeting" : "Recorded"));
+    if (s.source === "extension") k.append(mk("span", "badge ext", "Chrome"));
+    if (s.mode === "meeting" && s.linked) k.append(mk("span", "badge link", "in master graph"));
+    const act_td = mk("td");
+    act_td.append(act("Open", "ll://open/" + encodeURIComponent(s.id)));
+    if (s.mode === "meeting") act_td.append(act("Link to master graph", "ll://link/" + encodeURIComponent(s.id)));
+    act_td.append(act("Show in 3D", "ll://focus/" + encodeURIComponent(s.id)));
+    act_td.append(act("Delete", "ll://delete/" + encodeURIComponent(s.id), "danger"));
+    tr.append(t, k, w, mk("td", "", fmtDur(s.duration)), mk("td", "", String(s.notes || 0) + (s.mode === "meeting" ? " / " + (s.decisions || 0) + " dec / " + (s.actions || 0) + " act" : "")),
+      mk("td", "", String(s.concepts || 0)), act_td);
+    body.append(tr);
+  });
+}
+$("q").addEventListener("input", drawRows);
+</script>
+</body>
+</html>

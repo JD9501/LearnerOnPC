@@ -1,0 +1,195 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Study pack</title>
+<style>
+  :root { --bg:#0f1420; --fg:#e6e9f2; --muted:#8a93a8; --panel:#172033; --line:#2a3550; --accent:#6ea8ff; --good:#4fd1a1; --bad:#ff7b8a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--fg); font-family:"Segoe UI",system-ui,sans-serif; font-size:14px; line-height:1.55; }
+  header { position:sticky; top:0; background:rgba(15,20,32,.96); backdrop-filter:blur(6px); border-bottom:1px solid var(--line);
+           padding:10px 18px 0; z-index:3; }
+  header h1 { margin:0 0 8px; font-size:17px; }
+  nav { display:flex; gap:2px; flex-wrap:wrap; }
+  nav button { background:none; border:0; color:var(--muted); font:inherit; padding:8px 14px; cursor:pointer; border-bottom:2px solid transparent; }
+  nav button.on { color:var(--fg); border-color:var(--accent); }
+  main { max-width:860px; margin:0 auto; padding:18px; }
+  section { display:none; } section.on { display:block; }
+  h2 { font-size:15px; color:var(--accent); margin:24px 0 8px; text-transform:uppercase; letter-spacing:.06em; }
+  h2:first-child { margin-top:4px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin:10px 0; }
+  .tldr { font-size:16px; border-left:3px solid var(--accent); background:#14203a; }
+  ul { margin:6px 0; padding-left:20px; } li { margin:4px 0; }
+  .muted { color:var(--muted); }
+  .empty { text-align:center; color:var(--muted); padding:60px 20px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button.b { background:#1c2742; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:7px 14px; font:inherit; cursor:pointer; }
+  button.b:hover { border-color:var(--accent); }
+  input[type=text] { width:100%; background:#0f1626; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; }
+  .chap { display:flex; gap:12px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .chap b { color:var(--accent); min-width:56px; font-variant-numeric:tabular-nums; }
+  dt { font-weight:600; margin-top:12px; } dd { margin:2px 0 0; color:#c4cadb; }
+  .flip { perspective:1000px; height:230px; margin:14px 0; cursor:pointer; }
+  .flip .in { position:relative; width:100%; height:100%; transition:transform .45s; transform-style:preserve-3d; }
+  .flip.show .in { transform:rotateY(180deg); }
+  .face { position:absolute; inset:0; backface-visibility:hidden; border-radius:16px; border:1px solid var(--line); background:var(--panel);
+          display:flex; align-items:center; justify-content:center; text-align:center; padding:26px; font-size:18px; }
+  .face.back { transform:rotateY(180deg); background:#16301f; border-color:#2f6b49; }
+  .q { font-weight:600; margin-bottom:8px; }
+  .opt { display:block; width:100%; text-align:left; margin:6px 0; background:#101828; color:var(--fg); border:1px solid var(--line);
+         border-radius:9px; padding:9px 12px; font:inherit; cursor:pointer; }
+  .opt:hover:not(:disabled) { border-color:var(--accent); }
+  .opt.right { border-color:var(--good); background:#12301f; } .opt.wrong { border-color:var(--bad); background:#3a1620; }
+  .why { margin-top:8px; color:#c4cadb; font-size:13px; }
+  .bar { height:8px; border-radius:4px; background:#22304f; overflow:hidden; } .bar i { display:block; height:100%; background:var(--accent); }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; text-align:center; }
+  .stat b { display:block; font-size:22px; } .stat span { color:var(--muted); font-size:12px; }
+  .pill { display:inline-block; background:#1c2742; border:1px solid var(--line); border-radius:999px; padding:2px 10px; margin:3px 4px 3px 0; font-size:12px; }
+</style>
+</head>
+<body>
+<header><h1 id="title">Study pack</h1>
+  <nav id="nav"></nav></header>
+<main id="main"></main>
+<script>
+const TABS = [["overview", "Overview"], ["chapters", "Chapters"], ["glossary", "Glossary"], ["cards", "Flashcards"], ["quiz", "Quiz"], ["analytics", "Analytics"]];
+const MEETING_TABS = [["overview", "Summary"], ["actions", "Decisions & actions"], ["chapters", "Agenda"]];
+function tabsNow() { return D.mode === "meeting" ? MEETING_TABS : TABS; }
+let tab = "overview", D = { title: "", pack: {}, analytics: {} }, cardIdx = 0, cardOrder = [], quizState = {}, glossQ = "";
+
+function h(tag, props, ...kids) {
+  const e = document.createElement(tag);
+  for (const k in (props || {})) {
+    if (k === "class") e.className = props[k]; else if (k.startsWith("on")) e.addEventListener(k.slice(2), props[k]); else e.setAttribute(k, props[k]);
+  }
+  kids.flat().forEach(c => { if (c === null || c === undefined || c === false) return; e.append(c.nodeType ? c : document.createTextNode(String(c))); });
+  return e;
+}
+const list = arr => h("ul", {}, (arr || []).map(x => h("li", {}, x)));
+const empty = msg => h("div", { class: "empty" }, msg || "This demo session has no study pack.");
+function fmt(t) { t = Math.max(0, Math.floor(t)); const hh = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), s = t % 60;
+  return (hh ? hh + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); }
+
+function viewOverview() {
+  const p = D.pack || {}, root = h("section", { class: "on" });
+  if (!p.tldr && !p.summary) return empty();
+  root.append(h("div", { class: "card tldr" }, p.tldr));
+  if (p.takeaways && p.takeaways.length) root.append(h("h2", {}, "Key takeaways"), h("div", { class: "card" }, list(p.takeaways)));
+  if (p.summary) root.append(h("h2", {}, "Summary"), h("div", { class: "card" }, p.summary.split(/\n\n+/).map(t => h("p", {}, t))));
+  if (p.eli12) root.append(h("h2", {}, "Explain it simply"), h("div", { class: "card" }, p.eli12));
+  if (p.prerequisites && p.prerequisites.length) root.append(h("h2", {}, "Good to know first"), h("div", { class: "card" }, list(p.prerequisites)));
+  if (p.common_mistakes && p.common_mistakes.length) root.append(h("h2", {}, "Common mistakes"), h("div", { class: "card" }, list(p.common_mistakes)));
+  if (p.practice_tasks && p.practice_tasks.length) root.append(h("h2", {}, "Practise"), h("div", { class: "card" }, list(p.practice_tasks)));
+  if (p.open_questions && p.open_questions.length) root.append(h("h2", {}, "Questions to explore"), h("div", { class: "card" }, list(p.open_questions)));
+  if (p.errors && p.errors.length) root.append(h("h2", {}, "Some parts failed"), h("div", { class: "card muted" }, list(p.errors)));
+  return root;
+}
+
+function viewChapters() {
+  const ch = (D.pack && D.pack.chapters) || D.chapters || [];
+  if (!ch.length) return empty("Chapters appear after the first notes are generated.");
+  return h("section", { class: "on" }, h("h2", {}, "Chapters"), ch.map(c => h("div", { class: "chap" }, h("b", {}, c.time || fmt(c.t)), h("span", {}, c.title))));
+}
+
+function viewGlossary() {
+  const g = (D.pack && D.pack.glossary) || [];
+  if (!g.length) return empty();
+  const box = h("div", {}), root = h("section", { class: "on" });
+  const input = h("input", { type: "text", placeholder: "Filter terms...", value: glossQ });
+  const fill = () => { box.textContent = ""; const dl = h("dl", {});
+    g.filter(x => (x.term + " " + x.definition).toLowerCase().includes(glossQ.toLowerCase()))
+     .forEach(x => dl.append(h("dt", {}, x.term), h("dd", {}, x.definition))); box.append(dl); };
+  input.addEventListener("input", () => { glossQ = input.value; fill(); });
+  root.append(input, box); fill(); return root;
+}
+
+function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function viewCards() {
+  const cards = (D.pack && D.pack.flashcards) || [];
+  if (!cards.length) return empty();
+  if (cardOrder.length !== cards.length) cardOrder = cards.map((_, i) => i);
+  const c = cards[cardOrder[cardIdx % cards.length]];
+  const root = h("section", { class: "on" });
+  const flip = h("div", { class: "flip", onclick: () => flip.classList.toggle("show") },
+    h("div", { class: "in" }, h("div", { class: "face" }, c.q), h("div", { class: "face back" }, c.a)));
+  const go = d => () => { cardIdx = (cardIdx + d + cards.length) % cards.length; show(); };
+  root.append(h("div", { class: "muted" }, `Card ${cardIdx % cards.length + 1} of ${cards.length} - click the card to flip`), flip,
+    h("div", { class: "row" }, h("button", { class: "b", onclick: go(-1) }, "Previous"), h("button", { class: "b", onclick: go(1) }, "Next"),
+      h("button", { class: "b", onclick: () => { cardOrder = shuffle(cardOrder); cardIdx = 0; show(); } }, "Shuffle")));
+  return root;
+}
+
+function viewQuiz() {
+  const quiz = (D.pack && D.pack.quiz) || [];
+  if (!quiz.length) return empty();
+  const root = h("section", { class: "on" }), score = h("div", { class: "card row" });
+  const upd = () => { const done = Object.keys(quizState).length, ok = Object.values(quizState).filter(v => v.ok).length;
+    score.textContent = `Score: ${ok} / ${done} answered (of ${quiz.length})`; };
+  root.append(score);
+  quiz.forEach((q, qi) => {
+    const card = h("div", { class: "card" }, h("div", { class: "q" }, `${qi + 1}. ${q.q}`)), why = h("div", { class: "why" });
+    const btns = q.options.map((o, oi) => {
+      const b = h("button", { class: "opt", onclick: () => {
+        if (quizState[qi]) return;
+        quizState[qi] = { pick: oi, ok: oi === q.answer }; paint(); upd(); } }, `${"ABCDEF"[oi]}. ${o}`);
+      return b; });
+    const paint = () => { const st = quizState[qi]; if (!st) return;
+      btns.forEach((b, oi) => { b.disabled = true; if (oi === q.answer) b.classList.add("right"); else if (oi === st.pick) b.classList.add("wrong"); });
+      why.textContent = (st.ok ? "Correct. " : "Not quite. ") + (q.explain || ""); };
+    btns.forEach(b => card.append(b)); card.append(why); root.append(card); paint();
+  });
+  upd();
+  root.append(h("button", { class: "b", onclick: () => { quizState = {}; show(); } }, "Reset quiz"));
+  return root;
+}
+
+function viewAnalytics() {
+  const a = D.analytics || {};
+  if (!a.stats) return empty("Analytics appear once concepts have been captured.");
+  const s = a.stats, root = h("section", { class: "on" });
+  const stat = (v, l) => h("div", { class: "stat" }, h("b", {}, v), h("span", {}, l));
+  root.append(h("div", { class: "stats" }, stat(s.duration, "duration"), stat(s.words, "words spoken"), stat(s.wpm, "words / min"),
+    stat(s.concepts, "concepts"), stat(s.relations, "relations"), stat(s.notes, "note points")));
+  const maxScore = Math.max(1, ...((a.core || []).map(c => c.score)));
+  root.append(h("h2", {}, "Core concepts"), h("div", { class: "card" }, (a.core || []).map(c =>
+    h("div", { style: "margin:8px 0" }, h("div", { class: "row" }, h("b", {}, c.label), h("span", { class: "muted" }, `${c.mentions} mentions - ${c.degree} links`)),
+      h("div", { class: "bar" }, h("i", { style: `width:${Math.round(c.score / maxScore * 100)}%` }))))));
+  if ((a.path || []).length) root.append(h("h2", {}, "Suggested learning path (order introduced)"),
+    h("div", { class: "card" }, h("ol", {}, a.path.map(p => h("li", {}, p.label + " ", h("span", { class: "muted" }, p.t))))));
+  if ((a.communities || []).length) root.append(h("h2", {}, "Topic clusters"), a.communities.map(c =>
+    h("div", { class: "card" }, h("b", {}, `${c.name} `), h("span", { class: "muted" }, `(${c.size} concepts)`), h("div", {}, c.members.map(m => h("span", { class: "pill" }, m))))));
+  if ((a.isolated || []).length) root.append(h("h2", {}, "Loose ends - not yet connected to anything"), h("div", { class: "card" }, a.isolated.map(m => h("span", { class: "pill" }, m))));
+  return root;
+}
+
+function viewActions() {
+  const m = D.meeting || {}, root = h("section", { class: "on" });
+  const dec = m.decisions || [], act = m.actions || [];
+  if (!dec.length && !act.length) return empty("No decisions or action items were clearly stated in this meeting.");
+  if (dec.length) root.append(h("h2", {}, "Decisions"), h("div", { class: "card" }, h("ul", {}, dec.map(d => h("li", {}, h("span", { class: "muted" }, "[" + fmt(d.t) + "] "), d.text)))));
+  if (act.length) root.append(h("h2", {}, "Action items"), h("div", { class: "card" }, h("ul", {}, act.map(a =>
+    h("li", {}, a.task, a.owner ? h("span", { class: "pill" }, "owner: " + a.owner) : null, a.due ? h("span", { class: "pill" }, "due: " + a.due) : null)))));
+  return root;
+}
+const VIEWS = { actions: viewActions, overview: viewOverview, chapters: viewChapters, glossary: viewGlossary, cards: viewCards, quiz: viewQuiz, analytics: viewAnalytics };
+function show() {
+  const nav = document.getElementById("nav"); nav.textContent = "";
+  if (!tabsNow().some(t => t[0] === tab)) tab = "overview";
+  tabsNow().forEach(([id, name]) => nav.append(h("button", { class: id === tab ? "on" : "", onclick: () => { tab = id; show(); } }, name)));
+  const main = document.getElementById("main"); main.textContent = "";
+  const st = D.status;
+  if (st && st.stale && D.mode !== "meeting") {
+    const msg = st.exists
+      ? `This study pack only covers the first ${fmt(st.covered)} of ${fmt(st.now)} and is missing ${st.missing || "some"} newer note section(s). Press "Generate study pack" to refresh it.`
+      : "No study pack has been generated for these notes yet. Press \"Generate study pack\".";
+    main.append(h("div", { class: "card", style: "border-color:#6b5a25;color:#ffd166" }, "Out of date: " + msg));
+  }
+  const y = window.scrollY; main.append(VIEWS[tab]());
+  window.scrollTo(0, y);
+}
+function render(data) { D = data || D; document.getElementById("title").textContent = D.title || "Study pack"; show(); }
+show();
+</script>
+</body>
+</html>
